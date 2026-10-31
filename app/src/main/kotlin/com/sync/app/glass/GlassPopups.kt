@@ -20,6 +20,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -193,6 +197,69 @@ internal fun ContextMenuGlass(m: CtxState, backdrop: Backdrop, c: GlassControlle
                 .background(Color.White.copy(0.18f)))
             MenuRow(m.newLabel, LocalGlassAccent.current) { c.cmd { put("t", "ctx"); put("new", true) } }
         }
+    }
+}
+
+/**
+ * 곡 edit 상태의 Context Menu — 곡 즐겨찾기 / 곡 삭제.
+ * 위치·크기는 DOM(#pl-edit-menu)이 정하고, 여기서는 기존 Context Menu 와 같은 Kyant dialog glass 로만 그린다.
+ * (높이 = 패딩 6 + 행 44 + 구분선 5 + 행 44 + 패딩 6 = 105dp, DOM 과 동일)
+ */
+@Composable
+internal fun EditMenuGlass(m: EditMenuState, backdrop: Backdrop, c: GlassController) {
+    val pop = rememberPopIn()
+    val accent = LocalGlassAccent.current
+    Box(Modifier.cssRect(m.rect)) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .dialogGlass(backdrop, 24, pop.value, 16f, 32f)
+                .then(NoTouchThrough)
+                .padding(6.dp)
+        ) {
+            EditMenuRow(m.favLabel, GlassTheme.Content, { c.cmd { put("t", "em"); put("a", "fav") } }) {
+                Canvas(Modifier.size(18.dp)) {
+                    if (m.isFav) fillIcon(GlassIcons.Fav.first(), 20f, accent)
+                    else strokeIcon(GlassIcons.Fav, 20f, GlassTheme.Content, 1.6f)
+                }
+            }
+            Box(
+                Modifier.padding(horizontal = 12.dp, vertical = 2.dp).fillMaxWidth().height(1.dp)
+                    .background(Color.White.copy(0.16f))
+            )
+            EditMenuRow(m.delLabel, GlassTheme.Danger, { c.cmd { put("t", "em"); put("a", "del") } }) {
+                Canvas(Modifier.size(18.dp)) { strokeIcon(GlassIcons.Trash, 20f, GlassTheme.Danger, 1.6f) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditMenuRow(label: String, color: Color, onClick: () -> Unit, icon: @Composable () -> Unit) {
+    var pressed by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (pressed) Color.White.copy(0.12f) else Color.Transparent)
+            .pointerInput(onClick) {
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        try { tryAwaitRelease() } finally { pressed = false }
+                    },
+                    onTap = { onClick() }
+                )
+            }
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        BasicText(
+            label, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
+            style = TextStyle(color, 15.sp)
+        )
+        icon()
     }
 }
 
