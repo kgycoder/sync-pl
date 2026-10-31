@@ -134,6 +134,17 @@
             };
         }
 
+        /* 곡 edit 상태의 Context Menu (곡 즐겨찾기 / 곡 삭제) — 위치는 viewport(고정) 좌표 */
+        const em = $('pl-edit-menu');
+        if (em && em.classList.contains('on')) {
+            const er = em.getBoundingClientRect();
+            st.em = {
+                r: { x: er.left, y: er.top, w: em.offsetWidth, h: em.offsetHeight },
+                fav: txt(em.querySelector('.pl-em-fav')), isFav: em.classList.contains('is-fav'),
+                del: txt(em.querySelector('.pl-em-del'))
+            };
+        }
+
         /* 이름 입력 다이얼로그 */
         if ($('pl-dialog-overlay') && $('pl-dialog-overlay').classList.contains('on')) {
             const d = $('pl-dialog'), inp = $('pl-dialog-input');
@@ -194,7 +205,7 @@
     }
 
     /* 레이아웃/상태에 실제 영향이 있는 변화만 반응 (재생 진행/가사 하이라이트 등은 무시 → 메인 스레드 부하 0) */
-    const OVERLAYS = '#pl-ctx-menu,#pl-dialog-overlay,#pl-confirm-overlay,#pl-add-modal-overlay';
+    const OVERLAYS = '#pl-ctx-menu,#pl-edit-menu,#pl-dialog-overlay,#pl-confirm-overlay,#pl-add-modal-overlay';
     const HOSTS = '#mob-nav,#bar,.mob-srch-wrap';
     const mo = new MutationObserver(recs => {
         let burst = false, once = false;
@@ -202,7 +213,7 @@
             const t = r.target.nodeType === 1 ? r.target : r.target.parentElement;
             if (!t || t.id === 'bar-prog-fill') continue;
             // 박자 효과(카드 transform/shadow, 비주얼라이저 등)는 글래스 레이아웃과 무관 — closest() 비용도 아낀다
-            if (t.classList && (t.classList.contains('card') || t.classList.contains('vb'))) continue;
+            if (t.classList && (t.classList.contains('card') || t.classList.contains('vb') || t.classList.contains('pl-track'))) continue;
             if (t.id === 'np' || t.classList.contains('view') || t.id === 'bar') { if (t.id === 'np') syncNpLock(); once = true; continue; }
             if (t.closest) {
                 if (t.closest(OVERLAYS)) { burst = true; break; }
@@ -230,7 +241,7 @@
     ['resize', 'orientationchange'].forEach(e => window.addEventListener(e, () => kick(400), { passive: true }));
     /* 박자 효과로 계속 일어나는 카드/비주얼라이저의 transition·animation 종료는 레이아웃을 바꾸지 않으므로
        무시한다 (재생 중 kick → 프레임마다 collect()+JSON.stringify 가 반복되던 부하 제거). */
-    const BEAT_FX = '.card, #vizz, #np-pulse, #np-particles, .c-now-bar';
+    const BEAT_FX = '.card, #vizz, #np-pulse, #np-particles, .c-now-bar, .pl-track';
     ['input', 'focusin', 'focusout', 'transitionend', 'animationend']
         .forEach(ev => document.addEventListener(ev, e => {
             if ((ev === 'transitionend' || ev === 'animationend') && e.target && e.target.closest && e.target.closest(BEAT_FX)) return;
@@ -261,7 +272,7 @@
                     break;
                 }
                 case 'bar': {
-                    if (c.a === 'open') openNP();
+                    if (c.a === 'open') { if (typeof plEditExit === 'function') plEditExit(); openNP(); }
                     else if (c.a === 'fav') favCur();
                     else if (c.a === 'play') togglePlay();
                     else if (c.a === 'next') nextT();
@@ -291,6 +302,7 @@
                     }
                     break;
                 }
+                case 'em': if (c.a === 'fav') plEditFav(); else if (c.a === 'del') plEditDelete(); break;
                 case 'dlg': if (c.a === 'ok') plDialogConfirm(); else plDialogCancel(); break;
                 case 'cfm': if (c.a === 'ok') plConfirmOk(); else plConfirmCancel(); break;
                 case 'add': {
