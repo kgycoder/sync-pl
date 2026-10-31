@@ -36,6 +36,8 @@ internal object GlassIcons {
     val Plus by lazy { listOf(p("M5.5 1L5.5 10"), p("M1 5.5L10 5.5")) }
     val Check by lazy { listOf(p("M2 6L5 9L9 3")) }
     val Close by lazy { listOf(p("M1.5 1.5L10.5 10.5"), p("M10.5 1.5L1.5 10.5")) }
+    // Context menu (viewBox 20) — Fav 와 같은 격자
+    val Trash by lazy { listOf(p("M3 5L17 5"), p("M8 5L8 3L12 3L12 5"), p("M5 5L6 17L14 17L15 5"), p("M8.5 9L8.5 14"), p("M11.5 9L11.5 14")) }
 }
 
 internal fun DrawScope.strokeIcon(paths: List<Path>, viewBox: Float, color: Color, width: Float) {
