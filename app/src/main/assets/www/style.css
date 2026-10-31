@@ -5404,3 +5404,153 @@ html.bg-mode *, html.bg-mode *::before, html.bg-mode *::after {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
 }
+
+
+/* ════════════════════════════════════════════════════════
+   PLAYLIST TRACK — Press-and-Hold edit · Lift · Reorder
+   · 곡 행을 길게 누르면 살짝 눌렸다가(pressing) 떠오른다(lifted). 효과는 scale + 그림자뿐.
+   · 순서 변경 중 다른 곡(shift)은 transform 으로만 이동 → 레이아웃을 건드리지 않아 서로 겹치지 않는다.
+   · 곡 옆 Context Menu(#pl-edit-menu)는 기존 컨텍스트 메뉴와 같은 Liquid Glass 문법.
+     앱에서는 네이티브(Compose + Kyant backdrop)가 그리고, DOM 은 위치/상태의 원천으로만 남는다.
+════════════════════════════════════════════════════════ */
+#pl-track-list .pl-track {
+    position: relative;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+        background .12s,
+        border-color .2s,
+        box-shadow .26s ease,
+        transform .26s cubic-bezier(.2, .9, .25, 1);
+}
+
+#pl-track-list .pl-track img {
+    pointer-events: none;
+    -webkit-user-drag: none;
+}
+
+#pl-track-list .pl-track.pl-pressing,
+#pl-track-list .pl-track.pl-lifted,
+#pl-track-list .pl-track.pl-shift {
+    transform: translate(0, var(--ty, 0px)) scale(var(--sc, 1));
+}
+
+/* 누르는 중: 살짝 눌림 */
+#pl-track-list .pl-track.pl-pressing {
+    --sc: .985;
+    transition: background .12s, transform .38s ease-out;
+}
+
+/* edit 상태: 떠오름 */
+#pl-track-list .pl-track.pl-lifted {
+    --sc: 1.035;
+    z-index: 6;
+    will-change: transform;
+    touch-action: none;
+    background: rgba(255, 255, 255, .10);
+    border-color: rgba(255, 255, 255, .16);
+    box-shadow: 0 14px 32px rgba(0, 0, 0, .42), 0 3px 10px rgba(0, 0, 0, .30);
+}
+
+    #pl-track-list .pl-track.pl-lifted .pl-track-del {
+        opacity: 0;
+        pointer-events: none;
+    }
+
+/* 순서 변경 중 비켜 주는 곡: 감속만 있는 부드러운 이동(오버슈트 없음 → 겹치지 않음) */
+#pl-track-list .pl-track.pl-shift {
+    transition: background .12s, transform .34s cubic-bezier(.22, 1, .36, 1);
+}
+
+/* 끌고 있는 곡: 손가락을 1:1 로 따라간다(transform 트랜지션 없음) */
+#pl-track-list .pl-track.pl-dragging {
+    transition: background .12s, border-color .2s, box-shadow .26s ease;
+}
+
+/* 정리(commit) 프레임: 깜빡임 방지 */
+#pl-track-list.pl-nofx .pl-track {
+    transition: none !important;
+}
+
+/* ── Context Menu (edit 상태의 곡 옆) ── */
+#pl-edit-menu {
+    position: fixed;
+    z-index: 790;
+    display: none;
+    box-sizing: border-box;
+    width: 208px;
+    padding: 6px;
+    isolation: isolate;
+    background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04)), rgba(18,18,30,.55);
+    border: 1px solid rgba(255,255,255,.20);
+    border-radius: 24px;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.26),
+        inset 0 -1px 0 rgba(255,255,255,.07),
+        0 14px 34px rgba(0,0,0,.40);
+    -webkit-backdrop-filter: blur(34px) saturate(2.1);
+    backdrop-filter: blur(34px) saturate(2.1);
+}
+
+    #pl-edit-menu.on {
+        display: block;
+        animation: plEmIn .2s var(--ease) both;
+    }
+
+@keyframes plEmIn {
+    from { opacity: 0; transform: scale(.92); }
+    to   { opacity: 1; transform: none; }
+}
+
+.pl-em-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-sizing: border-box;
+    width: 100%;
+    height: 44px;
+    padding: 0 14px;
+    border-radius: 16px;
+    font-size: 15px;
+    color: var(--t1);
+    text-align: left;
+    -webkit-tap-highlight-color: transparent;
+    transition: background .12s var(--ease);
+}
+
+    .pl-em-item:active {
+        background: rgba(255,255,255,.12);
+    }
+
+    .pl-em-item svg {
+        flex-shrink: 0;
+    }
+
+.pl-em-div {
+    height: 1px;
+    margin: 2px 12px;
+    background: rgba(255,255,255,.16);
+}
+
+.pl-em-del {
+    color: #ff453a;
+}
+
+#pl-edit-menu.is-fav .pl-em-fav svg path {
+    fill: var(--acc);
+    stroke: var(--acc);
+}
+
+/* 앱(WebView + GlassBridge): 유리 표면과 버튼은 네이티브가 그린다 → DOM 은 투명 + 터치 비활성(네이티브가 입력 처리) */
+html.glass-native #pl-edit-menu {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    background: none !important;
+    box-shadow: none !important;
+    border-color: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    animation: none !important;
+}
