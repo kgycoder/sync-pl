@@ -2500,6 +2500,7 @@ function renderQueue() {
    VIEWS / ROUTING
 ════════════════════════════════════════════ */
 function gv(v, el) {
+    plEditExit();
     document.querySelectorAll('.view').forEach(e => e.classList.remove('on'));
     document.getElementById('v-' + v)?.classList.add('on');
     document.querySelectorAll('.nb').forEach(e => e.classList.remove('on'));
@@ -2664,6 +2665,7 @@ function plRenderGrid() {
 
 function plRenderDetail(plId) {
     const pl = plById(plId); if (!pl) return;
+    plEditExit();
     PL.curId = plId;
     document.getElementById('pl-list-view').style.display = 'none';
     document.getElementById('pl-detail-view').style.display = '';
@@ -2688,6 +2690,7 @@ function plRenderDetail(plId) {
     pl.tracks.forEach((t, i) => {
         const row = document.createElement('div');
         row.className = 'pl-track' + (S.track?.id === t.id ? ' playing' : '');
+        row.dataset.tid = t.id;
         row.innerHTML = `
       <span class="pl-track-num">${i + 1}</span>
       <img class="pl-track-art" src="${esc(trackThumbSrc(t))}" onerror="this.src='${esc(t.thumb || getThumbMd(t.id))}'" alt="">
@@ -2701,17 +2704,407 @@ function plRenderDetail(plId) {
           <line x1="1.5" y1="1.5" x2="9.5" y2="9.5"/><line x1="9.5" y1="1.5" x2="1.5" y2="9.5"/>
         </svg>
       </button>`;
-        row.addEventListener('click', () => { S.q = [...pl.tracks]; S.idx = i; playTrack(t, i); });
+        row.addEventListener('click', () => {
+            const idx = pl.tracks.findIndex(x => x.id === t.id);   // 순서 변경 후에도 현재 위치 기준
+            S.q = [...pl.tracks]; S.idx = idx; playTrack(t, idx);
+        });
         list.appendChild(row);
     });
 }
 
 function plShowList() {
+    plEditExit();
     PL.curId = null;
     document.getElementById('pl-list-view').style.display = '';
     document.getElementById('pl-detail-view').style.display = 'none';
     plRenderGrid();
 }
+
+/* ════════════════════════════════════════════
+   PLAYLIST TRACK — Press-and-Hold edit · Lift · Reorder
+   · 곡을 길게 누르면 edit 상태(Lift) → 곡 옆에 Context Menu(즐겨찾기/삭제)
+   · edit 상태의 곡은 위/아래로 끌어 순서를 바꾼다 (다른 곡은 겹치지 않고 순차적으로 자리를 비켜 준다)
+   · 기존 플레이리스트/재생 로직은 건드리지 않고, 행(.pl-track)의 제스처만 이 블록이 담당한다.
+════════════════════════════════════════════ */
+const PLE = {
+    list: null, menu: null,
+    mode: 'idle',                    // 'idle' | 'edit'
+    g: null,                         // 'press' | 'held' | 'editTouch' | 'drag' | 'drop'
+    row: null, timer: 0, raf: 0, swT: 0, commitT: 0,
+    x0: 0, y0: 0, lastY: 0, s0: 0,
+    swallow: false, busy: false, lastTouch: 0,
+    scroller: null, rows: [], from: 0, to: 0, dy: 0,
+    tops: [], hs: [], centers: [], ty: [], gap: 0, slotTop: 0, shiftAt: 0,
+    edgeTop: 96, edgeBot: 0
+};
+const PLE_HOLD_MS = 420;     // 길게 누름 판정 시간
+const PLE_PRESS_SLOP = 9;    // 길게 누르는 도중 이 거리 이상 움직이면 스크롤로 간주
+const PLE_DRAG_SLOP = 6;     // edit 상태에서 이 거리 이상 움직이면 순서 변경 드래그 시작
+const PLE_SHIFT_MS = 430;    // 다른 곡들이 자리를 비켜 주는 애니메이션이 모두 끝나는 시간(지연 포함)
+
+function plEditInit() {
+    const list = document.getElementById('pl-track-list');
+    if (!list || PLE.list) return;
+    PLE.list = list;
+
+    const menu = document.createElement('div');
+    menu.id = 'pl-edit-menu';
+    menu.innerHTML = `
+      <button type="button" class="pl-em-item pl-em-fav">
+        <span>곡 즐겨찾기</span>
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16.5S3 12 3 7.5a3.5 3.5 0 0 1 7-1A3.5 3.5 0 0 1 17 7.5C17 12 10 16.5 10 16.5z"/></svg>
+      </button>
+      <div class="pl-em-div"></div>
+      <button type="button" class="pl-em-item pl-em-del">
+        <span>곡 삭제</span>
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h14"/><path d="M8 5V3h4v2"/><path d="M5 5l1 12h8l1-12"/><path d="M8.5 9v5"/><path d="M11.5 9v5"/></svg>
+      </button>`;
+    document.body.appendChild(menu);
+    PLE.menu = menu;
+    menu.querySelector('.pl-em-fav').addEventListener('click', e => { e.stopPropagation(); plEditFav(); });
+    menu.querySelector('.pl-em-del').addEventListener('click', e => { e.stopPropagation(); plEditDelete(); });
+
+    document.addEventListener('touchstart', plOnDown, { capture: true, passive: true });
+    document.addEventListener('mousedown', plOnDown, true);
+    list.addEventListener('touchmove', plOnMove, { passive: false });   // edit 중에는 스크롤로 넘기지 않기 위해 non-passive
+    window.addEventListener('mousemove', plOnMove);
+    document.addEventListener('touchend', plOnUp, { capture: true, passive: true });
+    document.addEventListener('touchcancel', plOnUp, { capture: true, passive: true });
+    window.addEventListener('mouseup', plOnUp);
+    // 길게 누른 뒤 손을 뗄 때 발생하는 click(=곡 재생)이 edit 동작과 섞이지 않도록 차단
+    list.addEventListener('click', e => {
+        if (PLE.swallow || PLE.mode === 'edit') { e.stopPropagation(); e.preventDefault(); }
+    }, true);
+    list.addEventListener('contextmenu', e => { if (e.target.closest && e.target.closest('.pl-track')) e.preventDefault(); });
+    document.addEventListener('keydown', e => { if (e.code === 'Escape' && PLE.mode === 'edit') plEditExit(); });
+}
+
+function plPt(e) {
+    const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]) || e;
+    return { x: t.clientX, y: t.clientY };
+}
+
+/* ── 입력: 누름 ── */
+function plOnDown(e) {
+    const isTouch = e.type === 'touchstart';
+    if (isTouch) PLE.lastTouch = performance.now();
+    else if (e.button !== 0 || performance.now() - PLE.lastTouch < 800) return;   // 터치 뒤 따라오는 에뮬레이션 마우스 무시
+    if (PLE.busy) return;
+    const tgt = e.target;
+    if (!tgt || !tgt.closest) return;
+    if (isTouch && e.touches.length > 1) { plPressCancel(); return; }
+    const row = tgt.closest('#pl-track-list .pl-track');
+    const p = plPt(e);
+
+    if (PLE.mode === 'edit') {
+        if (tgt.closest('#pl-edit-menu')) return;
+        if (row && row === PLE.row) {              // edit 중인 곡을 다시 잡음 → 끌면 순서 변경, 그냥 떼면 edit 종료
+            PLE.g = 'editTouch'; PLE.swallow = true;
+            PLE.x0 = p.x; PLE.y0 = p.y; PLE.lastY = p.y;
+            return;
+        }
+        plEditExit();                               // 바깥을 누르면 edit 종료
+        if (row) PLE.swallow = true;                // 다른 곡을 눌렀다면 재생되지 않게 이번 탭은 삼킨다
+        return;
+    }
+    if (!row) return;
+    PLE.x0 = p.x; PLE.y0 = p.y; PLE.lastY = p.y;
+    plPressStart(row);
+}
+
+function plPressStart(row) {
+    plPressCancel();
+    PLE.g = 'press'; PLE.row = row;
+    row.classList.add('pl-pressing');               // 누르는 동안 살짝 눌리는 느낌
+    PLE.timer = setTimeout(() => {
+        PLE.timer = 0;
+        if (PLE.g !== 'press' || PLE.row !== row) return;
+        PLE.g = 'held';
+        PLE.swallow = true;
+        plEditEnter(row);
+    }, PLE_HOLD_MS);
+}
+
+function plPressCancel() {
+    if (PLE.timer) { clearTimeout(PLE.timer); PLE.timer = 0; }
+    if (PLE.g === 'press') {
+        if (PLE.row) PLE.row.classList.remove('pl-pressing');
+        PLE.g = null; PLE.row = null;
+    }
+}
+
+/* ── 입력: 이동 ── */
+function plOnMove(e) {
+    if (!PLE.g) return;
+    const p = plPt(e);
+    PLE.lastY = p.y;
+    if (PLE.g === 'press') {
+        if (Math.hypot(p.x - PLE.x0, p.y - PLE.y0) > PLE_PRESS_SLOP) plPressCancel();   // 스크롤 의도
+        return;
+    }
+    if (e.cancelable) e.preventDefault();           // edit 제스처는 페이지 스크롤로 넘기지 않는다
+    if (PLE.g === 'held' || PLE.g === 'editTouch') {
+        if (Math.hypot(p.x - PLE.x0, p.y - PLE.y0) > PLE_DRAG_SLOP) plDragStart(p.y);
+    } else if (PLE.g === 'drag') {
+        plDragMove(p.y);
+    }
+}
+
+/* ── 입력: 뗌 ── */
+function plOnUp() {
+    const g = PLE.g;
+    if (g === 'press') plPressCancel();
+    else if (g === 'held') PLE.g = null;            // edit 유지 (Context Menu 표시 중)
+    else if (g === 'editTouch') { PLE.g = null; plEditExit(); }   // lift 된 곡을 그냥 탭 → 종료
+    else if (g === 'drag') plDragEnd();
+    if (PLE.swallow) {
+        clearTimeout(PLE.swT);
+        PLE.swT = setTimeout(() => { PLE.swallow = false; }, 450);
+    }
+}
+
+/* ── edit 상태 ── */
+function plEditEnter(row) {
+    PLE.mode = 'edit'; PLE.row = row;
+    row.classList.remove('pl-pressing');
+    row.classList.add('pl-lifted');                 // Press-and-Hold Lift
+    plEditMenuShow();
+}
+
+function plEditExit() {
+    if (!PLE.list) return;
+    if (PLE.g === 'drop') {                         // 드롭 정리 중이면 결과를 먼저 확정
+        clearTimeout(PLE.commitT);
+        plDragCommit(true);
+    }
+    if (PLE.timer) { clearTimeout(PLE.timer); PLE.timer = 0; }
+    if (PLE.raf) { cancelAnimationFrame(PLE.raf); PLE.raf = 0; }
+    PLE.list.querySelectorAll('.pl-pressing,.pl-lifted,.pl-shift,.pl-dragging').forEach(r => {
+        r.classList.remove('pl-pressing', 'pl-lifted', 'pl-shift', 'pl-dragging');
+        r.style.removeProperty('--ty');
+        r.style.transitionDelay = '';
+    });
+    PLE.menu.classList.remove('on');
+    PLE.mode = 'idle'; PLE.g = null; PLE.row = null; PLE.busy = false;
+}
+
+function plEditTrack() {
+    const pl = plById(PL.curId), row = PLE.row;
+    if (!pl || !row) return null;
+    return pl.tracks.find(t => t.id === row.dataset.tid) || null;
+}
+
+function plBottomLimit() {
+    let b = innerHeight;
+    ['bar', 'mob-nav'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || el.classList.contains('bar-hidden')) return;
+        const r = el.getBoundingClientRect();
+        if (r.height > 0 && r.top > innerHeight * 0.4 && r.top < b) b = r.top;
+    });
+    return b;
+}
+
+/** Context Menu 를 edit 중인 곡 옆(아래, 공간이 없으면 위)에 놓는다. 위치/크기는 glass-bridge 가 네이티브 글래스로 미러링한다. */
+function plEditMenuShow() {
+    const m = PLE.menu, row = PLE.row, t = plEditTrack();
+    if (!m || !row || !t) return;
+    const fav = isFav(t.id);
+    m.classList.toggle('is-fav', fav);
+    const lab = m.querySelector('.pl-em-fav span');
+    if (lab) lab.textContent = fav ? '즐겨찾기 해제' : '곡 즐겨찾기';
+    m.classList.add('on');
+    const w = m.offsetWidth, h = m.offsetHeight;
+    const r = row.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;      // lift(scale) 영향을 받지 않도록 중심 기준
+    const rowTop = cy - row.offsetHeight / 2, rowBot = cy + row.offsetHeight / 2, rowRight = cx + row.offsetWidth / 2;
+    let y = rowBot + 10;
+    if (y + h > plBottomLimit() - 8) y = rowTop - 10 - h;
+    y = Math.max(12, Math.min(y, innerHeight - h - 12));
+    const x = Math.max(12, Math.min(rowRight - w - 8, innerWidth - w - 12));
+    m.style.left = Math.round(x) + 'px';
+    m.style.top = Math.round(y) + 'px';
+}
+
+function plEditFav() {
+    const t = plEditTrack();
+    if (!t) return;
+    toggleFavTrack(t);
+    plEditExit();
+}
+
+function plEditDelete() {
+    const row = PLE.row, t = plEditTrack(), plId = PL.curId;
+    if (!row || !t || PLE.busy) return;
+    PLE.busy = true;
+    PLE.menu.classList.remove('on');
+    row.classList.remove('pl-lifted');
+    // 해당 곡이 접히며 아래 곡들이 자연스럽게 올라온다
+    row.style.height = row.offsetHeight + 'px';
+    row.style.overflow = 'hidden';
+    void row.offsetHeight;
+    row.style.transition = 'height .24s cubic-bezier(.22,1,.36,1), padding .24s cubic-bezier(.22,1,.36,1), opacity .18s ease, border-width .24s';
+    row.style.height = '0px';
+    row.style.paddingTop = '0px'; row.style.paddingBottom = '0px';
+    row.style.borderWidth = '0px';
+    row.style.opacity = '0';
+    setTimeout(() => {
+        plEditExit();
+        plRemoveTrack(plId, t.id);
+    }, 260);
+}
+
+/* ── 순서 변경(드래그) ── */
+function plScroller(el) {
+    let n = el.parentElement;
+    while (n && n !== document.body && n !== document.documentElement) {
+        const oy = getComputedStyle(n).overflowY;
+        if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight + 1) return n;
+        n = n.parentElement;
+    }
+    return window;
+}
+function plScrollTop() {
+    const s = PLE.scroller;
+    return s && s !== window ? s.scrollTop : (window.scrollY || 0);
+}
+
+function plDragStart(y) {
+    const list = PLE.list, row = PLE.row;
+    const rows = Array.from(list.children).filter(n => n.classList && n.classList.contains('pl-track'));
+    const from = rows.indexOf(row);
+    if (from < 0 || rows.length < 2) return;        // 곡이 하나뿐이면 끌 수 없다
+    PLE.rows = rows; PLE.from = from; PLE.to = from; PLE.dy = 0;
+    PLE.tops = rows.map(r => r.offsetTop);
+    PLE.hs = rows.map(r => r.offsetHeight);
+    PLE.centers = rows.map((r, i) => PLE.tops[i] + PLE.hs[i] / 2);
+    PLE.gap = Math.max(0, PLE.tops[1] - PLE.tops[0] - PLE.hs[0]);
+    PLE.slotTop = PLE.tops[from];
+    PLE.ty = rows.map(() => 0);
+    PLE.scroller = plScroller(list);
+    PLE.s0 = plScrollTop(); PLE.y0 = y; PLE.lastY = y;
+    PLE.edgeTop = 96; PLE.edgeBot = plBottomLimit() - 28;
+    PLE.menu.classList.remove('on');                // 끄는 동안에는 메뉴를 접고, 놓으면 새 자리 옆에 다시 보여 준다
+    rows.forEach(r => { if (r !== row) r.classList.add('pl-shift'); });
+    row.classList.add('pl-dragging');
+    PLE.g = 'drag';
+    PLE.raf = requestAnimationFrame(plAutoScroll);
+}
+
+function plDragMove(y) {
+    PLE.lastY = y;
+    const n = PLE.rows.length, from = PLE.from;
+    let dy = (y - PLE.y0) + (plScrollTop() - PLE.s0);                 // 자동 스크롤 이동량까지 포함 → 손가락을 계속 따라간다
+    const minDy = PLE.tops[0] - PLE.tops[from];
+    const maxDy = (PLE.tops[n - 1] + PLE.hs[n - 1]) - (PLE.tops[from] + PLE.hs[from]);
+    dy = Math.max(minDy, Math.min(maxDy, dy));
+    PLE.dy = dy;
+    PLE.row.style.setProperty('--ty', dy.toFixed(1) + 'px');
+    const dc = PLE.centers[from] + dy;
+    let to = from;
+    for (let i = from + 1; i < n; i++) if (dc > PLE.centers[i]) to = i;
+    for (let i = from - 1; i >= 0; i--) if (dc < PLE.centers[i]) to = i;
+    if (to !== PLE.to) {
+        const prev = PLE.to;
+        PLE.to = to;
+        plApplyShifts(prev);
+    }
+}
+
+/** 새 순서에서 각 곡이 앉을 슬롯을 계산해, 다른 곡들을 빈 슬롯 쪽부터 차례로 이동시킨다(서로 겹치지 않음). */
+function plApplyShifts(prevTo) {
+    const rows = PLE.rows, tops = PLE.tops, hs = PLE.hs, from = PLE.from, to = PLE.to;
+    const order = [];
+    for (let i = 0; i < rows.length; i++) if (i !== from) order.push(i);
+    order.splice(to, 0, from);
+    const newTop = new Array(rows.length);
+    let top = tops[0];
+    order.forEach(idx => { newTop[idx] = top; top += hs[idx] + PLE.gap; });
+    PLE.slotTop = newTop[from];
+
+    const changed = [];
+    for (let i = 0; i < rows.length; i++) {
+        if (i === from) continue;
+        const ty = newTop[i] - tops[i];
+        if (Math.abs(ty - PLE.ty[i]) > 0.5) { changed.push(i); PLE.ty[i] = ty; }
+    }
+    // 이전에 비어 있던 자리(prevTo)에 가까운 곡부터 → 항상 "비어 있는 칸"으로만 이동하므로 겹치지 않는다
+    changed.sort((a, b) => Math.abs(a - prevTo) - Math.abs(b - prevTo));
+    changed.forEach((i, k) => {
+        const r = rows[i];
+        r.style.transitionDelay = (Math.min(k, 5) * 22) + 'ms';
+        r.style.setProperty('--ty', PLE.ty[i] + 'px');
+    });
+    PLE.shiftAt = performance.now();
+}
+
+function plAutoScroll() {
+    PLE.raf = 0;
+    if (PLE.g !== 'drag') return;
+    const y = PLE.lastY;
+    let v = 0;
+    if (y < PLE.edgeTop) v = -Math.min(18, (PLE.edgeTop - y) * 0.22 + 2);
+    else if (y > PLE.edgeBot) v = Math.min(18, (y - PLE.edgeBot) * 0.22 + 2);
+    if (v) {
+        const before = plScrollTop();
+        PLE.scroller.scrollBy(0, v);
+        if (plScrollTop() !== before) plDragMove(y);
+    }
+    PLE.raf = requestAnimationFrame(plAutoScroll);
+}
+
+function plDragEnd() {
+    if (PLE.raf) { cancelAnimationFrame(PLE.raf); PLE.raf = 0; }
+    const row = PLE.row;
+    PLE.g = 'drop'; PLE.busy = true;
+    row.classList.remove('pl-dragging');            // transform 트랜지션 복구 → 새 슬롯으로 부드럽게 안착
+    row.style.setProperty('--ty', (PLE.slotTop - PLE.tops[PLE.from]) + 'px');
+    const wait = Math.max(280, PLE.shiftAt + PLE_SHIFT_MS - performance.now());
+    PLE.commitT = setTimeout(() => plDragCommit(false), wait);
+}
+
+function plDragCommit(noMenu) {
+    clearTimeout(PLE.commitT);
+    if (PLE.g !== 'drop') return;
+    const list = PLE.list, rows = PLE.rows, row = PLE.row, from = PLE.from, to = PLE.to;
+    const pl = plById(PL.curId);
+    PLE.g = null; PLE.busy = false;
+    if (!row || row.parentNode !== list) return;
+    list.classList.add('pl-nofx');                  // 정리하는 프레임에서는 트랜지션을 끈다 → 깜빡임 없음
+    if (pl && to !== from && pl.tracks.length === rows.length) {
+        const oldIds = pl.tracks.map(t => t.id);
+        const moved = pl.tracks.splice(from, 1)[0];
+        pl.tracks.splice(to, 0, moved);
+        plSave();
+        list.insertBefore(row, to > from ? rows[to].nextSibling : rows[to]);
+        // 이 플레이리스트에서 재생 중이면 큐도 새 순서를 따른다
+        if (S.q.length === oldIds.length && S.q.every((t, i) => t && t.id === oldIds[i])) {
+            S.q = [...pl.tracks];
+            if (S.track) { const ni = S.q.findIndex(t => t.id === S.track.id); if (ni >= 0) S.idx = ni; }
+        }
+        // 커버(앞 4곡)도 새 순서 반영
+        const cover = document.getElementById('pl-detail-cover');
+        if (cover) {
+            const thumbs = pl.tracks.slice(0, 4).map(t => trackThumbSrc(t));
+            cover.className = 'pl-detail-cover' + (thumbs.length === 1 ? ' single' : '');
+            cover.innerHTML = thumbs.map(src => `<img src="${esc(src)}" alt="">`).join('');
+        }
+    }
+    rows.forEach(r => {
+        r.classList.remove('pl-shift', 'pl-dragging');
+        r.style.removeProperty('--ty');
+        r.style.transitionDelay = '';
+    });
+    Array.from(list.children).forEach((r, i) => {
+        const num = r.querySelector && r.querySelector('.pl-track-num');
+        if (num) num.textContent = i + 1;
+    });
+    void list.offsetHeight;
+    list.classList.remove('pl-nofx');
+    if (!noMenu && PLE.mode === 'edit') plEditMenuShow();
+}
+
+plEditInit();
 
 let _plAddTimer = null;
 function plAddModalOpen() {
@@ -3813,6 +4206,7 @@ window.__onAndroidBack = function() {
     if (LV.active) { closeLyricsView(); return; }
     const np = document.getElementById('np');
     if (np && np.classList.contains('on')) { closeNP(); return; }
+    if (PLE.mode === 'edit') { plEditExit(); return; }
     if (document.getElementById('pl-dialog-overlay')?.classList.contains('on')) { plDialogCancel(); return; }
     if (document.getElementById('pl-confirm-overlay')?.classList.contains('on')) { plConfirmCancel(); return; }
     if (document.getElementById('pl-add-modal-overlay')?.classList.contains('on')) { plAddModalClose(); return; }
