@@ -18,6 +18,8 @@ data class CssRect(val x: Float, val y: Float, val w: Float, val h: Float)
     val playing: Boolean, val fav: Boolean, val accent: Long, val progress: Float
 )
 @Immutable data class CtxState(val rect: CssRect, val title: String, val items: List<String>, val newLabel: String)
+/** 플레이리스트 곡을 길게 눌러 edit 상태가 되었을 때 곡 옆에 뜨는 Context Menu (곡 즐겨찾기 / 곡 삭제) */
+@Immutable data class EditMenuState(val rect: CssRect, val favLabel: String, val isFav: Boolean, val delLabel: String)
 @Immutable data class DialogState(
     val rect: CssRect, val title: String, val value: String, val placeholder: String,
     val focused: Boolean, val okLabel: String, val cancelLabel: String
@@ -41,6 +43,7 @@ data class GlassState(
     val search: SearchState? = null,
     val bar: BarState? = null,
     val ctx: CtxState? = null,
+    val edit: EditMenuState? = null,
     val dialog: DialogState? = null,
     val confirm: ConfirmState? = null,
     val add: AddModalState? = null
@@ -62,6 +65,9 @@ data class GlassState(
                 },
                 ctx = o.optJSONObject("ctx")?.let {
                     CtxState(rect(it), it.optString("title"), strings(it.optJSONArray("items")), it.optString("new"))
+                },
+                edit = o.optJSONObject("em")?.let {
+                    EditMenuState(rect(it), it.optString("fav"), it.optBoolean("isFav"), it.optString("del"))
                 },
                 dialog = o.optJSONObject("dlg")?.let {
                     DialogState(rect(it), it.optString("title"), it.optString("value"), it.optString("ph"),
